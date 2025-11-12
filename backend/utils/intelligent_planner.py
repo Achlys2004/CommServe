@@ -53,6 +53,90 @@ class IntelligentPlanner:
             word in history_lower for word in ["dataset", "data", "olist", "e-commerce"]
         )
 
+        # Detect vague/incomplete queries that likely need context from history
+        vague_indicators = [
+            "what about",
+            "how about",
+            "what if",
+            "and what about",
+            "also show",
+            "now show",
+        ]
+
+        # Check if query is vague/incomplete (too short or starts with vague pattern)
+        is_vague = any(pattern in query_lower for pattern in vague_indicators) or (
+            len(user_query.split()) <= 4
+            and any(word in query_lower for word in ["about", "for", "in", "from"])
+        )
+
+        # If query seems incomplete/vague AND we have conversation history, inherit action
+        if is_vague and conversation_history:
+            # Try to extract the last action from conversation history using multiple patterns
+            last_action = None
+
+            # Look for explicit "Action: X" pattern
+            for action_type in ["SQL", "CODE", "RAG", "SQL+RAG", "METADATA"]:
+                if f"Action: {action_type}" in conversation_history:
+                    last_action = action_type
+                    break
+
+            # If no explicit action found, look at the previous query content to infer
+            if not last_action and "Query:" in conversation_history:
+                # Extract the last query from history
+                lines = conversation_history.split("\n")
+                for line in reversed(lines):
+                    if line.startswith("Query:"):
+                        prev_query = line.replace("Query:", "").strip()
+                        prev_lower = prev_query.lower()
+
+                        # Infer action from previous query patterns
+                        if any(
+                            word in prev_lower
+                            for word in [
+                                "show",
+                                "top",
+                                "most",
+                                "count",
+                                "how many",
+                                "average",
+                                "total",
+                                "list",
+                            ]
+                        ):
+                            last_action = "SQL"
+                        elif any(
+                            word in prev_lower
+                            for word in ["chart", "plot", "visuali", "graph"]
+                        ):
+                            last_action = "CODE"
+                        elif any(
+                            word in prev_lower
+                            for word in [
+                                "why",
+                                "explain",
+                                "sentiment",
+                                "feel",
+                                "opinion",
+                            ]
+                        ):
+                            last_action = "RAG"
+                        break
+
+            if (
+                last_action
+                and last_action != "METADATA"
+                and last_action != "CONVERSATION"
+            ):
+                logger.info(
+                    f"Follow-up detected: '{user_query}' inheriting action '{last_action}' from context"
+                )
+                return self._build_result(
+                    last_action,
+                    f"Vague/incomplete query detected - inheriting '{last_action}' action from previous context",
+                    0.88,
+                    use_cache=False,
+                )
+
         # Check for visualization/chart requests FIRST (these take priority)
         visualization_keywords = [
             "chart",
@@ -180,12 +264,21 @@ class IntelligentPlanner:
 4. **SQL+RAG** - For queries needing both structured data AND contextual insights
    - Examples: "Show top products and explain why they're popular"
 
-5. **CONVERSATION** - For greetings, thanks, clarifications
+5. **CONVERSATION** - For greetings, thanks, clarifications, off-topic questions
    - Examples: "Hi", "Thank you", "Can you help me?"
+   - NOTE: ONLY use this for non-data queries. If it relates to data analysis, use another action.
 
 6. **METADATA** - For queries about the dataset itself (structure, available data, schema, overview)
    - Examples: "What data do you have?", "Tell me about this dataset", "What can I analyze?", "Available tables?", "Dataset overview", "What information is available?"
    - KEY: Questions asking WHAT the dataset contains, its structure, or capabilities
+
+**CRITICAL: Handling Follow-up Questions**
+- If the query is vague (e.g., "what about january?", "show me more", "what about 2017?"), look at the conversation history
+- Inherit the action type from the previous query if it's a continuation
+- Examples:
+  - Previous: "what are the most loved products" (SQL) → Current: "what about in january?" → Action: SQL (filtering by time)
+  - Previous: "show sales trends" (SQL) → Current: "what about 2017?" → Action: SQL (filtering by year)
+  - Previous: "create a chart" (CODE) → Current: "make it for june" → Action: CODE (updating time filter)
 
 **Dataset Context:**
 E-commerce (Olist Brazilian) dataset with: orders, products, customers, sellers, payments, reviews
@@ -197,7 +290,7 @@ Can analyze: sales, revenue, trends, geography, sentiment, customer behavior
 **Current Query:** "{query}"
 
 **Your Task:**
-Analyze the query intent and classify it. Learn from the similar queries above. Respond with valid JSON only (no markdown):
+Analyze the query intent and classify it. If this is a follow-up question (like "what about X?"), inherit the action from the previous query. Learn from the similar queries above. Respond with valid JSON only (no markdown):
 
 {{
   "action": "SQL|RAG|CODE|SQL+RAG|CONVERSATION|METADATA",
@@ -368,3 +461,67 @@ JSON Response:"""
     def get_statistics(self) -> dict:
         """Get learning system statistics."""
         return self.learning_system.get_statistics()
+
+    def expand_vague_query(self, query: str, conversation_history: str) -> str:
+        """
+        Expand a vague follow-up query into a complete query using conversation history.
+
+        Example:
+            Previous: "Show me the top 5 most sold product categories from january 2017"
+            Vague: "what about february 2017?"
+            Expanded: "Show me the top 5 most sold product categories from february 2017"
+        """
+        if not conversation_history or "Query:" not in conversation_history:
+            return query
+
+        # Extract the last query from history
+        lines = conversation_history.split("\n")
+        prev_query = None
+        for line in reversed(lines):
+            if line.startswith("Query:"):
+                prev_query = line.replace("Query:", "").strip()
+                break
+
+        if not prev_query:
+            return query
+
+        # Check if current query is actually vague
+        query_lower = query.lower()
+        vague_patterns = ["what about", "how about", "what if", "also show", "now show"]
+        is_vague = any(pattern in query_lower for pattern in vague_patterns)
+
+        if not is_vague:
+            return query
+
+        # Use LLM to intelligently expand the query
+        expansion_prompt = f"""You are helping expand a vague follow-up query into a complete query using context.
+
+Previous Query: "{prev_query}"
+
+Follow-up Query: "{query}"
+
+Task: Rewrite the follow-up query as a complete, standalone query that includes the context from the previous query.
+
+Rules:
+1. Keep the SAME intent/action from the previous query (e.g., if it was "show top 5", keep "show top 5")
+2. Replace the time period/filter with the new one from the follow-up
+3. Make it a complete, clear query
+4. Return ONLY the expanded query, nothing else
+
+Expanded Query:"""
+
+        try:
+            expanded = call_llm(expansion_prompt, max_tokens=LLMTokenLimits.SHORT)
+            if expanded and len(expanded.strip()) > len(query):
+                # Validate the expansion makes sense
+                if any(
+                    word in expanded.lower()
+                    for word in ["show", "get", "list", "find", "top", "most"]
+                ):
+                    logger.info(f"Expanded vague query: '{query}' → '{expanded}'")
+                    return expanded.strip()
+        except Exception as e:
+            logger.warning(f"Failed to expand vague query: {e}")
+
+        # Fallback: return original query
+        return query

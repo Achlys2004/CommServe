@@ -11,7 +11,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 from backend.features.summariser import Summariser
-import config  # Import config to set matplotlib backend
+import config  
+from config import GENERATED_DIR
 
 
 class TimeoutError(Exception):
@@ -43,7 +44,6 @@ class ExecutorEngine:
             package_name = library_name
 
         try:
-            # Use subprocess to run pip install
             result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", package_name],
                 capture_output=True,
@@ -383,6 +383,7 @@ class ExecutorEngine:
                         figures = plt.get_fignums()
                         if figures:
                             result["output_type"] = "image"
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                             for fig_num in figures:
                                 try:
                                     fig = plt.figure(fig_num)
@@ -397,6 +398,20 @@ class ExecutorEngine:
                                     result["images"].append(
                                         f"data:image/png;base64,{img_base64}"
                                     )
+
+                                    # Also save the image to a file in generatedfiles directory
+                                    image_filename = f"{timestamp}_figure_{fig_num}.png"
+                                    image_path = GENERATED_DIR / image_filename
+                                    fig.savefig(
+                                        image_path,
+                                        format="png",
+                                        dpi=100,
+                                        bbox_inches="tight",
+                                    )
+                                    result[
+                                        "stdout"
+                                    ] += f"Image saved to: {image_path}\n"
+
                                     plt.close(fig)
                                 except Exception as fig_error:
                                     result[

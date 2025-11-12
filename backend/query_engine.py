@@ -646,6 +646,21 @@ class QueryEngine:
             else:
                 action = plan.get("action", "SQL+RAG" if self.hybrid_mode else "RAG")
 
+            # If query is vague and we have context, expand it into a complete query
+            # Note: Only expand for data queries (SQL, CODE, RAG, SQL+RAG), not CONVERSATION or METADATA
+            if context_string and action in ["SQL", "CODE", "RAG", "SQL+RAG"]:
+                from backend.utils.intelligent_planner import IntelligentPlanner
+
+                planner = IntelligentPlanner()
+                expanded_query = planner.expand_vague_query(
+                    translated_query, context_string
+                )
+                if expanded_query != translated_query:
+                    logger.info(
+                        f"Query expanded for better execution: '{translated_query}' → '{expanded_query}'"
+                    )
+                    translated_query = expanded_query
+
             q_lower = translated_query.lower()
 
             # Execute based on action

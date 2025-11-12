@@ -277,7 +277,7 @@ USER REQUEST: {query}
 
 REQUIREMENTS:
 1. Database: Connect to 'data/olist.db' using sqlite3
-2. Visualizations: Use matplotlib/seaborn (do NOT call plt.show())
+2. Visualizations: Use matplotlib/seaborn (do NOT call plt.show(), save figures with plt.savefig('generatedfiles/plot.png'))
 3. Data handling: Use pandas DataFrames
 4. Insights: Print 3-5 specific findings with numbers
 5. Error handling: Use try-except blocks
@@ -296,9 +296,10 @@ conn = sqlite3.connect('data/olist.db')
 try:
     # Query 1: [describe what it does]
     query1 = \"\"\"
-    SELECT ... FROM orders
-    WHERE strftime('%Y-%m', order_purchase_timestamp) = '2017-01'
-    AND order_status = 'delivered'
+    SELECT o.order_id, o.customer_id, o.order_status
+    FROM orders o
+    WHERE strftime('%Y-%m', o.order_purchase_timestamp) = '2017-01'
+    AND o.order_status = 'delivered'
     LIMIT 1000
     \"\"\"
     df1 = pd.read_sql(query1, conn)
@@ -310,6 +311,7 @@ try:
     plt.xlabel('X Label')
     plt.ylabel('Y Label')
     plt.tight_layout()
+    plt.savefig('generatedfiles/plot.png')  # Save the figure
     
     # Print insights
     print("=== Analysis Results ===")
@@ -319,7 +321,16 @@ finally:
     conn.close()
 ```
 
-CRITICAL RULES:
+CRITICAL SQL RULES FOR JOINS:
+- ALWAYS use table aliases (e.g., orders AS o, order_payments AS op)
+- ALWAYS fully qualify column names in JOINs (e.g., o.order_id, op.order_id)
+- Example CORRECT JOIN:
+  SELECT o.order_id, op.payment_type
+  FROM order_payments op
+  JOIN orders o ON op.order_id = o.order_id
+- NEVER use ambiguous column names (e.g., just "order_id" without table prefix)
+
+CRITICAL PYTHON RULES:
 - Keep queries SIMPLE with LIMIT clause
 - Use triple-quoted strings for SQL (easier to read)
 - Test each line mentally - does it compile?
@@ -327,6 +338,7 @@ CRITICAL RULES:
 - Use simple variable names (df, query, fig)
 - NO complex nested function calls
 - Print clear insights with {{}} formatting
+- ALWAYS save visualizations with plt.savefig('generatedfiles/plot.png')
 
 Generate ONLY the Python code (no explanations, no markdown):"""
 
@@ -389,6 +401,7 @@ try:
     df['column'].value_counts().head(10).plot(kind='bar')
     plt.title('Title')
     plt.tight_layout()
+    plt.savefig('generatedfiles/plot.png')
     
     print(f"Total: {{len(df)}}")
 finally:
