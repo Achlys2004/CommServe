@@ -13,26 +13,24 @@ logger.setLevel(logging.WARNING)
 PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
 
 # Multi-tier API key configuration
-# Tier 1: OpenAI (Primary)
-# Tier 2: Gemini (Fallback)
-# Tier 3: OpenRouter (Emergency)
+# Tier 1: OpenRouter (Primary)
+# Tier 2: OpenAI (Fallback)
+# Tier 3: Gemini (Emergency)
 TIER_KEYS = {
-    "tier1": {"key": os.getenv("OPENAI_API_KEY"), "provider": "openai"},
-    "tier2": {
+    "tier1": {"key": os.getenv("OPENROUTER_API_KEY"), "provider": "openrouter"},
+    "tier2": {"key": os.getenv("OPENAI_API_KEY"), "provider": "openai"},
+    "tier3": {
         "key": os.getenv("GEMINI_API_KEY"),
         "provider": "gemini",
-    },
-    "tier3": {
-        "key": os.getenv("OPENROUTER_API_KEY"),
-        "provider": "openrouter",
     },
 }
 
 OPENAI_MODEL = "gpt-4o-mini"
-GEMINI_MODEL = "gemini-pro-latest"
+GEMINI_MODEL = "gemini-2.0-flash"
 OPENROUTER_MODEL = "openai/gpt-4o-mini"
 
-FALLBACK_EMBED_DIM = int(os.getenv("FALLBACK_EMBED_DIM", "384"))
+# OpenAI text-embedding-3-small produces 1536-dimensional embeddings
+FALLBACK_EMBED_DIM = int(os.getenv("FALLBACK_EMBED_DIM", "1536"))
 
 _tier_lock = threading.Lock()
 
@@ -55,30 +53,30 @@ _key_status = {
     },
 }
 
-# Create OpenAI client for tier1
-_openai_client = None
-if TIER_KEYS["tier1"]["key"]:
-    _openai_client = OpenAI(
-        api_key=TIER_KEYS["tier1"]["key"],
-        timeout=60.0,
-        max_retries=0,  # Disable internal retries to allow our fallback logic
-    )
-
-# Create Gemini client for tier2
-_gemini_configured = False
-if TIER_KEYS["tier2"]["key"]:
-    genai.configure(api_key=TIER_KEYS["tier2"]["key"])  # type: ignore
-    _gemini_configured = True
-
-# Create OpenRouter client for tier3
+# Create OpenRouter client for tier1 (Primary)
 _openrouter_client = None
-if TIER_KEYS["tier3"]["key"]:
+if TIER_KEYS["tier1"]["key"]:
     _openrouter_client = OpenAI(
-        api_key=TIER_KEYS["tier3"]["key"],
+        api_key=TIER_KEYS["tier1"]["key"],
         base_url="https://openrouter.ai/api/v1",
         timeout=60.0,
         max_retries=0,  # Disable internal retries to allow our fallback logic
     )
+
+# Create OpenAI client for tier2 (Fallback)
+_openai_client = None
+if TIER_KEYS["tier2"]["key"]:
+    _openai_client = OpenAI(
+        api_key=TIER_KEYS["tier2"]["key"],
+        timeout=60.0,
+        max_retries=0,  # Disable internal retries to allow our fallback logic
+    )
+
+# Create Gemini client for tier3 (Emergency)
+_gemini_configured = False
+if TIER_KEYS["tier3"]["key"]:
+    genai.configure(api_key=TIER_KEYS["tier3"]["key"])  # type: ignore
+    _gemini_configured = True
 
 
 def _get_next_available_tier():
@@ -176,7 +174,7 @@ def _call_openai_with_fallback(messages, max_tokens=256, retry_count=3):
             provider = tier_config["provider"]
 
             try:
-                logger.info(
+                logger.debug(
                     f"Attempting {provider} call with {tier} (attempt {attempt + 1}/{retry_count})"
                 )
 
@@ -326,7 +324,8 @@ def _call_openai_with_fallback(messages, max_tokens=256, retry_count=3):
                     cooldown = error_classification.cooldown_seconds
                     logger.debug(f"X {tier} network error. Cooldown: {cooldown}s")
                 elif error_classification.error_type == "auth":
-                    cooldown = error_classification.cooldown_seconds
+                    # Shorter cooldown for auth errors - they might be temporary API issues
+                    cooldown = 60  # 1 minute instead of 5 minutes
                     logger.warning(f"X {tier} auth error. Cooldown: {cooldown}s")
                     _mark_tier_failed(tier, cooldown)
                     continue
@@ -346,6 +345,16 @@ def _call_openai_with_fallback(messages, max_tokens=256, retry_count=3):
                     time.sleep(backoff_seconds)
         else:
             logger.warning(f"No tier available for attempt {attempt + 1}")
+
+            # If no tiers available, force-clear cooldowns and try again once
+            if attempt == 0:
+                logger.info("All tiers in cooldown - force clearing to retry")
+                with _tier_lock:
+                    for tier_key in _key_status:
+                        if TIER_KEYS[tier_key]["key"]:  # Only reset if key exists
+                            _key_status[tier_key]["cooldown_until"] = 0
+                continue  # Retry with cleared cooldowns
+
             if attempt < retry_count - 1:
                 backoff_seconds = 2**attempt
                 logger.info(f" No tiers available, backing off for {backoff_seconds}s")
@@ -356,13 +365,54 @@ def _call_openai_with_fallback(messages, max_tokens=256, retry_count=3):
     if successful_provider:
         logger.info(f"Last successful provider: {successful_provider}")
 
-    # Provide user-friendly error message
-    if "ResourceExhausted" in str(last_error) or "quota" in str(last_error).lower():
-        return "[SYSTEM NOTICE] AI service quota exceeded. The system will continue working with available providers. Your query is being processed with alternative AI services."
-    elif "rate limit" in str(last_error).lower():
-        return "[SYSTEM NOTICE] AI service rate limit reached. Please wait a moment before trying again."
+    # Provide user-friendly conversational error message based on error type
+    error_str = str(last_error).lower()
+
+    if (
+        "resourceexhausted" in str(last_error)
+        or "quota" in error_str
+        or "402" in str(last_error)
+    ):
+        return """I apologize, but I'm experiencing some technical difficulties right now. It looks like the AI services have reached their usage limits. 
+
+Here's what I can still help you with:
+- Answer questions about the dataset structure
+- Explain what data is available
+- Guide you on how to explore the data
+
+Please check your API credentials and billing status, or try again in a few minutes. If you need immediate help, let me know what you'd like to know about the data!"""
+
+    elif "rate limit" in error_str or "429" in str(last_error):
+        return """Hey there! I'm getting a lot of requests right now and need to slow down a bit. Give me about 30 seconds and I'll be ready to help you again.
+
+In the meantime, you can:
+- Browse the example queries above
+- Think about what insights you'd like from the data
+- Check out the dataset info in the sidebar
+
+Thanks for your patience! 😊"""
+
+    elif "auth" in error_str or "401" in str(last_error) or "403" in str(last_error):
+        return """Hmm, I'm having trouble connecting to my AI backend. It looks like there might be an authentication issue with the API keys.
+
+Please check that:
+- Your API keys are correctly set in the .env file
+- The keys are active and have the necessary permissions
+- You're using valid credentials for at least one provider (OpenAI, Gemini, or OpenRouter)
+
+Once that's fixed, I'll be ready to chat! 🔑"""
+
     else:
-        return f"[ERROR: {type(last_error).__name__}] {str(last_error)}"
+        return f"""Oops! I ran into an unexpected issue while processing your request. 
+
+Technical details: {type(last_error).__name__}
+
+Let me try to help you differently:
+- I can still answer general questions about the dataset
+- You can try rephrasing your question
+- Or ask something simpler to start with
+
+What would you like to know about the e-commerce data? 🤔"""
 
 
 def call_llm(prompt, system=None, max_tokens=256):

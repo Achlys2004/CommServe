@@ -23,7 +23,7 @@ class LLMTokenLimits:
     LONG = 600
 
     # Code generation (Python scripts, complex logic)
-    CODE = 800
+    CODE = 1200
 
 
 # Token limit mapping by function type

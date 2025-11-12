@@ -166,7 +166,7 @@ class Orchestrator:
 
     def _generate_insight_commentary(
         self, query: str, sql_result: Dict[str, Any], action: str, context: str
-    ) -> str:
+    ) -> Optional[str]:
         """
         Generate human-like insights and commentary about the data results.
         This is where we add the "Sci personality" - conversational and insightful.
@@ -188,6 +188,7 @@ Data summary: {data_summary}
 {f"Context: {context}" if context else ""}
 
 Write a natural, conversational insight (1-2 sentences) that:
+- If a random period was selected, explicitly mention which month/year/period was chosen
 - Highlights 1-2 key findings with specific numbers
 - Adds practical business meaning
 - Sounds like a colleague sharing insights
@@ -201,10 +202,32 @@ Keep under 80 words:"""
 
         try:
             commentary = call_llm(prompt, max_tokens=LLMTokenLimits.MEDIUM)
-            return commentary if commentary else "Here are your results!"
+
+            # Check if commentary is actually an error message
+            error_indicators = [
+                "I apologize, but I'm experiencing",
+                "Hey there! I'm getting a lot of requests",
+                "Hmm, I'm having trouble connecting",
+                "Oops! I ran into an unexpected issue",
+            ]
+
+            if commentary:
+                is_error = any(
+                    commentary.startswith(indicator) for indicator in error_indicators
+                )
+            else:
+                is_error = False
+
+            if is_error or not commentary:
+                logger.warning(
+                    "LLM returned error message instead of commentary, skipping insights"
+                )
+                return None  # Return None to skip showing insights
+
+            return commentary
         except Exception as e:
             logger.warning(f"Failed to generate commentary: {e}")
-            return "Here are your results - let me know if you need any clarification!"
+            return None  # Return None instead of fallback message
 
     def _summarize_results_for_llm(self, rows: list, query: str) -> str:
         """Create concise summary of results for LLM commentary generation."""
@@ -213,6 +236,28 @@ Keep under 80 words:"""
 
         # Get basic stats
         total_rows = len(rows)
+
+        # Check for random selections in query
+        has_random = "random" in query.lower()
+        selected_period = None
+
+        if has_random and rows:
+            # Look for period/date columns in first row
+            first_row = rows[0]
+            for key, value in first_row.items():
+                key_lower = key.lower()
+                if any(
+                    period in key_lower
+                    for period in ["month", "year", "period", "date"]
+                ):
+                    selected_period = f"{key}: {value}"
+                    break
+                # Also check if value looks like a date/month
+                elif isinstance(value, str) and (
+                    len(value) == 7 and value.count("-") == 1
+                ):  # YYYY-MM format
+                    selected_period = f"Selected {key}: {value}"
+                    break
 
         # Extract numeric columns and calculate basic stats
         numeric_cols = []
@@ -227,6 +272,10 @@ Keep under 80 words:"""
 
         # Build summary
         summary_parts = [f"Total rows: {total_rows}"]
+
+        # Add selected period if found
+        if selected_period:
+            summary_parts.insert(0, selected_period)
 
         # Add sample data
         if rows:
@@ -250,7 +299,7 @@ Keep under 80 words:"""
 
     def _generate_code_insights(
         self, query: str, execution_result: Dict[str, Any], context: str
-    ) -> str:
+    ) -> Optional[str]:
         """
         Generate insights for code execution results (visualizations, analysis).
         """
@@ -295,14 +344,32 @@ Keep it under 150 words. Be analytical but friendly."""
 
         try:
             commentary = call_llm(prompt, max_tokens=LLMTokenLimits.MEDIUM)
-            return (
-                commentary
-                if commentary
-                else "I've analyzed the data and generated visualizations for you."
-            )
+
+            # Check if commentary is actually an error message
+            error_indicators = [
+                "I apologize, but I'm experiencing",
+                "Hey there! I'm getting a lot of requests",
+                "Hmm, I'm having trouble connecting",
+                "Oops! I ran into an unexpected issue",
+            ]
+
+            if commentary:
+                is_error = any(
+                    commentary.startswith(indicator) for indicator in error_indicators
+                )
+            else:
+                is_error = False
+
+            if is_error or not commentary:
+                logger.warning(
+                    "LLM returned error message instead of code insights, skipping"
+                )
+                return None  # Return None to skip showing insights
+
+            return commentary
         except Exception as e:
             logger.warning(f"Failed to generate code insights: {e}")
-            return "I've completed the analysis and generated visualizations for you."
+            return None  # Return None instead of fallback message
 
     def _map_action_to_tier(self, action: str) -> str:
         """Map action type to tier for tracking."""

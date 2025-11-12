@@ -105,11 +105,23 @@ st.markdown(
         font-size: 14px;
     }
     
-    /* Metric cards */
-    .stMetric {
+    /* Metric cards - Fixed styling */
+    [data-testid="stMetricValue"] {
+        background-color: transparent;
+        color: #667eea;
+        font-size: 24px;
+        font-weight: bold;
+    }
+    [data-testid="stMetricLabel"] {
+        background-color: transparent;
+        color: #333;
+        font-size: 14px;
+    }
+    div[data-testid="metric-container"] {
         background-color: #f8f9fa;
-        padding: 8px;
+        padding: 12px;
         border-radius: 8px;
+        border: 1px solid #e0e0e0;
     }
     
     /* Divider spacing */
@@ -451,6 +463,8 @@ with chat_container:
                     detected_label = "Python Analysis"
                 elif detected_type == "METADATA":
                     detected_label = "Dataset Info"
+                elif detected_type == "CONVERSATION":
+                    detected_label = "Conversation"
                 else:
                     detected_label = detected_type
 
@@ -475,6 +489,12 @@ with chat_container:
                                 "Should be RAG Search",
                                 "Should be Python Analysis",
                                 "Should be Dataset Info",
+                                "Should be Conversation (Human-like chat)",
+                                "Python code generated wrong results",
+                                "Python code has syntax errors",
+                                "Visualization is incorrect",
+                                "SQL query returned wrong results",
+                                "SQL query has syntax errors",
                             ],
                             key=f"feedback_select_{msg_idx}",
                             label_visibility="collapsed",
@@ -507,6 +527,30 @@ with chat_container:
                                     "Should be RAG Search": (False, "RAG"),
                                     "Should be Python Analysis": (False, "CODE"),
                                     "Should be Dataset Info": (False, "METADATA"),
+                                    "Should be Conversation (Human-like chat)": (
+                                        False,
+                                        "CONVERSATION",
+                                    ),
+                                    "Python code generated wrong results": (
+                                        False,
+                                        "CODE_RETRY",
+                                    ),
+                                    "Python code has syntax errors": (
+                                        False,
+                                        "CODE_RETRY",
+                                    ),
+                                    "Visualization is incorrect": (
+                                        False,
+                                        "CODE_RETRY",
+                                    ),
+                                    "SQL query returned wrong results": (
+                                        False,
+                                        "SQL_RETRY",
+                                    ),
+                                    "SQL query has syntax errors": (
+                                        False,
+                                        "SQL_RETRY",
+                                    ),
                                 }
 
                                 was_correct, correct_action = feedback_mapping.get(
@@ -533,6 +577,14 @@ with chat_container:
                                         if was_correct:
                                             st.success(
                                                 "✅ Thank you! Positive feedback recorded."
+                                            )
+                                        elif correct_action == "CODE_RETRY":
+                                            st.success(
+                                                "✅ Thank you! The system will improve Python code generation. Try rephrasing your query with more specific details about what you want to analyze."
+                                            )
+                                        elif correct_action == "SQL_RETRY":
+                                            st.success(
+                                                "✅ Thank you! The system will improve SQL query generation. Try rephrasing your query with more specific details about what data you want to retrieve."
                                             )
                                         else:
                                             st.success(

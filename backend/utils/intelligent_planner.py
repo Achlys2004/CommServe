@@ -53,6 +53,27 @@ class IntelligentPlanner:
             word in history_lower for word in ["dataset", "data", "olist", "e-commerce"]
         )
 
+        # Check for visualization/chart requests FIRST (these take priority)
+        visualization_keywords = [
+            "chart",
+            "plot",
+            "graph",
+            "visuali",
+            "create a",
+            "generate a",
+            "draw",
+            "diagram",
+        ]
+
+        if any(keyword in query_lower for keyword in visualization_keywords):
+            # This is clearly a CODE request for visualization
+            return self._build_result(
+                "CODE",
+                "Query explicitly requests charts/visualizations",
+                0.95,
+                use_cache=False,
+            )
+
         if any(keyword in query_lower for keyword in metadata_keywords) or (
             has_dataset_context
             and any(
@@ -111,11 +132,21 @@ class IntelligentPlanner:
             return result
 
         except Exception as e:
-            logger.exception(f"Error in intelligent planner: {e}")
-            # Fallback to original planner
+            logger.error(f"Error in intelligent planner: {e}")
+            # Fallback to original planner WITHOUT recursion
             from backend.planner import decide_action as fallback_planner
 
-            return fallback_planner(user_query, conversation_history)
+            try:
+                return fallback_planner(user_query, conversation_history)
+            except Exception as fallback_error:
+                logger.error(f"Fallback planner also failed: {fallback_error}")
+                # Return safe default action
+                return self._build_result(
+                    "CONVERSATIONAL",
+                    "Falling back to conversational mode due to errors",
+                    0.5,
+                    use_cache=False,
+                )
 
     def _classify_with_examples(
         self, query: str, similar_queries: list, conversation_history: str = ""
@@ -182,6 +213,27 @@ JSON Response:"""
             )
 
             if not llm_response:
+                return self._fallback_classification(query)
+
+            # Check if response is an error message (starts with conversational text)
+            error_indicators = [
+                "I apologize, but I'm experiencing",
+                "Hey there! I'm getting a lot of requests",
+                "Hmm, I'm having trouble connecting",
+                "Oops! I ran into an unexpected issue",
+                "All LLM providers failed",
+                "[SYSTEM NOTICE]",
+                "[ERROR:",
+            ]
+
+            is_error_response = any(
+                llm_response.startswith(indicator) for indicator in error_indicators
+            )
+
+            if is_error_response:
+                logger.warning(
+                    f"LLM returned error message instead of JSON: {llm_response[:100]}..."
+                )
                 return self._fallback_classification(query)
 
             # Clean response

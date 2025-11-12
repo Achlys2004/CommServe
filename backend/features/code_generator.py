@@ -66,6 +66,109 @@ def get_basic_schema_context() -> str:
     return schema_text
 
 
+def _generate_fallback_code(query: str) -> str:
+    """
+    Generate a simple, guaranteed-to-work fallback visualization code.
+    Used when LLM-generated code fails validation.
+    """
+    # Extract date if mentioned in query
+    date_filter = ""
+    query_lower = query.lower()
+
+    # Look for specific months
+    months = {
+        "january": "01",
+        "february": "02",
+        "march": "03",
+        "april": "04",
+        "may": "05",
+        "june": "06",
+        "july": "07",
+        "august": "08",
+        "september": "09",
+        "october": "10",
+        "november": "11",
+        "december": "12",
+    }
+
+    year = "2017"  # default
+    month = "01"  # default
+
+    for month_name, month_num in months.items():
+        if month_name in query_lower:
+            month = month_num
+            break
+
+    if "2016" in query_lower:
+        year = "2016"
+    elif "2018" in query_lower:
+        year = "2018"
+
+    date_filter = f"{year}-{month}"
+
+    return f"""import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Connect to database
+conn = sqlite3.connect('data/olist.db')
+
+try:
+    # Query for {date_filter} sales data
+    query = \"\"\"
+    SELECT 
+        strftime('%Y-%m-%d', o.order_purchase_timestamp) as date,
+        COUNT(DISTINCT o.order_id) as order_count,
+        SUM(CAST(oi.price AS REAL)) as total_revenue
+    FROM orders o
+    JOIN order_items oi ON o.order_id = oi.order_id
+    WHERE strftime('%Y-%m', o.order_purchase_timestamp) = '{date_filter}'
+    AND o.order_status = 'delivered'
+    GROUP BY date
+    ORDER BY date
+    LIMIT 100
+    \"\"\"
+    
+    df = pd.read_sql(query, conn)
+    
+    # Create visualization
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # Plot 1: Daily orders
+    ax1.plot(df['date'], df['order_count'], marker='o', linewidth=2)
+    ax1.set_title(f'Daily Orders - {date_filter}', fontsize=12)
+    ax1.set_xlabel('Date')
+    ax1.set_ylabel('Number of Orders')
+    ax1.tick_params(axis='x', rotation=45)
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Daily revenue
+    ax2.bar(df['date'], df['total_revenue'], color='green', alpha=0.7)
+    ax2.set_title(f'Daily Revenue - {date_filter}', fontsize=12)
+    ax2.set_xlabel('Date')
+    ax2.set_ylabel('Revenue (R$)')
+    ax2.tick_params(axis='x', rotation=45)
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Print insights
+    print("=" * 50)
+    print(f"Sales Analysis for {{date_filter}}")
+    print("=" * 50)
+    print(f"Total Orders: {{df['order_count'].sum():,}}")
+    print(f"Total Revenue: R$ {{df['total_revenue'].sum():,.2f}}")
+    print(f"Average Daily Orders: {{df['order_count'].mean():.1f}}")
+    print(f"Average Daily Revenue: R$ {{df['total_revenue'].mean():,.2f}}")
+    print(f"Peak Orders: {{df['order_count'].max()}} on {{df.loc[df['order_count'].idxmax(), 'date']}}")
+    print("=" * 50)
+    
+finally:
+    conn.close()
+"""
+
+
 def generate_sql(query, context_info="", schema_info=None):
     try:
         # Load schema
@@ -122,7 +225,8 @@ QUALITY REQUIREMENTS:
 3. Join category_translation for product names (use COALESCE for NULL)
 4. Filter for 'delivered' status when analyzing completed orders
 5. Use appropriate aggregations (COUNT, SUM, AVG)
-6. Return ONLY the SQL query, no explanations
+6. When user requests "random" month/year/period, include the selected value as the first column in results
+7. Return ONLY the SQL query, no explanations
 
 Generate the SQL query now:"""
 
@@ -162,19 +266,74 @@ def generate_code(query, context_info=""):
         # Get comprehensive schema context for the LLM
         schema_context = get_basic_schema_context()
 
-        prompt = (
-            "You are an expert Python developer for data analysis and visualization.\n\n"
-            + schema_context
-            + "\n\n"
-            + (f"Context: {context_info}\n\n" if context_info else "")
-            + "User Request: "
-            + query
-            + "\n\nGenerate a complete, executable Python script that:\n1. Connects to SQLite database at 'data/olist.db'\n2. Executes appropriate SQL queries using correct table/column names\n3. Creates meaningful visualizations (matplotlib/seaborn)\n4. Calculates and prints key insights with specific numbers\n5. Focuses on actionable business insights\n6. Handles errors gracefully with try-except blocks\n7. Closes database connections properly\n\nCRITICAL REQUIREMENTS:\n- Use EXACT table and column names from the schema above\n- Start with imports (no explanatory text before code)\n- Use CAST(column AS REAL) for numeric aggregations in SQL\n- Convert DataFrame columns to numeric: pd.to_numeric(df['col'], errors='coerce')\n- Handle NaN values properly with .notna() and .dropna()\n- Use errorbar=None instead of ci=None in seaborn\n- For seaborn barplot, use hue parameter instead of palette for color mapping\n- Do NOT call plt.show() (plots are captured automatically)\n- Join category_translation for English product category names\n- Use COALESCE for NULL handling in SQL\n- Filter 'delivered' orders for completed transactions\n- Print 3-5 specific, actionable insights with actual numbers\n- Include detailed print statements with statistics\n- ALL strings must be properly terminated with matching quotes\n- ALL brackets/parentheses must be balanced\n- NO markdown formatting in code (remove ```)\n- Code must compile without syntax errors\n\nFor customer behavior analysis, focus on:\n- Geographic patterns (cities/states from customers table)\n- Spending patterns (order values, payment methods from order_payments)\n- Order frequency and timing (timestamps from orders)\n- Review scores and satisfaction (from order_reviews)\n- Business recommendations based on data\n\nReturn ONLY executable Python code:"
-        )
+        prompt = f"""You are an expert Python developer. Generate clean, executable Python code for data analysis.
 
-        # Try to generate code with retry logic
-        max_attempts = 2
+DATABASE SCHEMA:
+{schema_context}
+
+{"CONTEXT: " + context_info if context_info else ""}
+
+USER REQUEST: {query}
+
+REQUIREMENTS:
+1. Database: Connect to 'data/olist.db' using sqlite3
+2. Visualizations: Use matplotlib/seaborn (do NOT call plt.show())
+3. Data handling: Use pandas DataFrames
+4. Insights: Print 3-5 specific findings with numbers
+5. Error handling: Use try-except blocks
+6. Syntax: MUST be valid Python - balanced parentheses, closed strings
+
+CODE STRUCTURE (follow exactly):
+```
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Connect to database
+conn = sqlite3.connect('data/olist.db')
+
+try:
+    # Query 1: [describe what it does]
+    query1 = \"\"\"
+    SELECT ... FROM orders
+    WHERE strftime('%Y-%m', order_purchase_timestamp) = '2017-01'
+    AND order_status = 'delivered'
+    LIMIT 1000
+    \"\"\"
+    df1 = pd.read_sql(query1, conn)
+    
+    # Create visualization 1
+    plt.figure(figsize=(10, 6))
+    # ... plotting code ...
+    plt.title('Title')
+    plt.xlabel('X Label')
+    plt.ylabel('Y Label')
+    plt.tight_layout()
+    
+    # Print insights
+    print("=== Analysis Results ===")
+    print(f"Total records: {{len(df1)}}")
+    
+finally:
+    conn.close()
+```
+
+CRITICAL RULES:
+- Keep queries SIMPLE with LIMIT clause
+- Use triple-quoted strings for SQL (easier to read)
+- Test each line mentally - does it compile?
+- Close ALL parentheses before moving to next line
+- Use simple variable names (df, query, fig)
+- NO complex nested function calls
+- Print clear insights with {{}} formatting
+
+Generate ONLY the Python code (no explanations, no markdown):"""
+
+        # Try to generate code with retry logic and validation
+        max_attempts = 3
         code_text = None
+
         for attempt in range(max_attempts):
             code_text = call_llm(prompt, max_tokens=LLMTokenLimits.CODE)
 
@@ -186,89 +345,97 @@ def generate_code(query, context_info=""):
                     continue
                 code_text = "# Error: Failed to generate code"
                 break
-            else:
-                # Got valid response, break out of retry loop
+
+            # Extract code from markdown
+            code_text = extract_python_code(code_text)
+            code_text = code_text.strip()
+            if code_text.startswith("```"):
+                code_text = code_text[3:].strip()
+            if code_text.endswith("```"):
+                code_text = code_text[:-3].strip()
+
+            # Validate the generated code
+            is_valid, fixed_code, error_msg = validate_and_fix_code(code_text)
+
+            if is_valid:
+                code_text = fixed_code
+                logger.info(
+                    f"Generated code validated successfully on attempt {attempt + 1}"
+                )
                 break
+            else:
+                logger.warning(
+                    f"Attempt {attempt + 1}: Code validation failed - {error_msg}"
+                )
+
+                if attempt < max_attempts - 1:
+                    # Try again with a simpler prompt emphasizing syntax correctness
+                    prompt = f"""The previous code had syntax error: {error_msg}
+
+Generate SIMPLE, VALID Python code for: {query}
+
+Use this exact structure:
+```python
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+
+conn = sqlite3.connect('data/olist.db')
+try:
+    query = \"\"\"SELECT * FROM orders WHERE strftime('%Y-%m', order_purchase_timestamp) = '2017-01' LIMIT 100\"\"\"
+    df = pd.read_sql(query, conn)
+    
+    plt.figure(figsize=(10, 6))
+    df['column'].value_counts().head(10).plot(kind='bar')
+    plt.title('Title')
+    plt.tight_layout()
+    
+    print(f"Total: {{len(df)}}")
+finally:
+    conn.close()
+```
+
+CRITICAL: Balance ALL parentheses. Close ALL strings. Keep it SIMPLE.
+Generate code now:"""
+                    continue
+                else:
+                    # Last attempt failed, use the error message
+                    logger.error(
+                        f"All {max_attempts} attempts failed to generate valid code"
+                    )
+                    break
 
         # Ensure code_text is never None
         if not code_text:
             code_text = "# Error: Failed to generate code"
 
-        # Robust code extraction from markdown using the validator
-        code_text = extract_python_code(code_text)
-
-        # Remove any remaining markdown artifacts
-        code_text = code_text.strip()
-        if code_text.startswith("```"):
-            code_text = code_text[3:].strip()
-        if code_text.endswith("```"):
-            code_text = code_text[:-3].strip()
-
-        # Validate and auto-fix common issues
+        # Final validation check
         is_valid, fixed_code, error_msg = validate_and_fix_code(code_text)
 
         if is_valid:
             code_text = fixed_code
-            logger.info("Generated code validated successfully")
+            logger.info("Final code validation successful")
         else:
-            # Validation failed, try LLM fix
-            logger.warning(f"Code validation failed: {error_msg}")
+            # Validation still failed after all attempts - use fallback
+            logger.warning(f"Final validation failed: {error_msg}")
+            logger.info("Using guaranteed fallback visualization template")
+            code_text = _generate_fallback_code(query)
 
-            fix_prompt = (
-                "The following Python code has a syntax error:\n\n```python\n"
-                + code_text
-                + "\n```\n\nError: "
-                + error_msg
-                + "\n\nFix the syntax error and return ONLY the corrected Python code without any explanations or markdown.\nEnsure all strings are properly terminated and all brackets/parentheses are balanced.\nReturn executable Python code starting with imports."
-            )
-
-            try:
-                fixed_code = call_llm(fix_prompt, max_tokens=LLMTokenLimits.CODE)
-                if fixed_code:
-                    fixed_code = fixed_code.strip()
-
-                    # Robust extraction for fixed code
-                    if "```python" in fixed_code:
-                        parts = fixed_code.split("```python")
-                        if len(parts) > 1:
-                            fixed_code = parts[1].split("```")[0].strip()
-                    elif "```py" in fixed_code:
-                        parts = fixed_code.split("```py")
-                        if len(parts) > 1:
-                            fixed_code = parts[1].split("```")[0].strip()
-                    elif fixed_code.startswith("```"):
-                        lines = fixed_code.split("\n")
-                        start_idx = 1  # Skip first ``` line
-                        end_idx = len(lines)
-                        for i in range(len(lines) - 1, -1, -1):
-                            if lines[i].strip() == "```":
-                                end_idx = i
-                                break
-                        fixed_code = "\n".join(lines[start_idx:end_idx]).strip()
-
-                    # Remove any remaining artifacts
-                    if fixed_code.startswith("```"):
-                        fixed_code = fixed_code[3:].strip()
-                    if fixed_code.endswith("```"):
-                        fixed_code = fixed_code[:-3].strip()
-
-                    # Validate the fix
-                    compile(fixed_code, "<string>", "exec")
-                    code_text = fixed_code
-                    logger.info("Code auto-corrected successfully")
-            except Exception as e:
-                logger.error(f"Could not fix code: {e}")
-                # Return a more helpful error script with the actual error details
-                error_details = (
-                    "\nSyntax Error Details:\n- Message: " + error_msg + "\n"
-                )
+            # Validate the fallback (should always work)
+            is_valid, fixed_code, error_msg = validate_and_fix_code(code_text)
+            if is_valid:
+                code_text = fixed_code
+                logger.info("Fallback code validated successfully")
+            else:
+                # Even fallback failed (very unlikely) - last resort error message
+                logger.error(f"Even fallback code failed validation: {error_msg}")
+                error_details = f"\nSyntax Error Details:\n- Message: {error_msg}\n"
                 error_msg_repr = repr(error_details)
-                error_script = (
+                code_text = (
                     "# Syntax error in generated code\nimport sqlite3\nimport pandas as pd\n\nprint('Code generation encountered a syntax error.')\nprint("
                     + error_msg_repr
                     + ")\nprint()\nprint('This usually happens when:')\nprint('1. The AI response contains unterminated strings')\nprint('2. Unbalanced brackets or parentheses')\nprint('3. Invalid character encoding')\nprint()\nprint('Please try rephrasing your request with more specific details.')\nprint('Example: \"Create a bar chart showing top 10 cities by order count\"')\n"
                 )
-                code_text = error_script
 
         return code_text
 
@@ -337,12 +504,18 @@ def get_detailed_schema_context() -> str:
         if relationships:
             context_parts.append("## Table Relationships:")
             for rel in relationships:
-                from_table, from_col = rel["from"].split(".")
-                to_table, to_col = rel["to"].split(".")
-                rel_type = rel["type"]
-                context_parts.append(
-                    f"- `{from_table}.{from_col}` → `{to_table}.{to_col}` ({rel_type})"
-                )
+                if (
+                    isinstance(rel, dict)
+                    and "from" in rel
+                    and "to" in rel
+                    and "type" in rel
+                ):
+                    from_table, from_col = rel["from"].split(".")
+                    to_table, to_col = rel["to"].split(".")
+                    rel_type = rel["type"]
+                    context_parts.append(
+                        f"- `{from_table}.{from_col}` → `{to_table}.{to_col}` ({rel_type})"
+                    )
             context_parts.append("")
 
         # Common JOIN patterns

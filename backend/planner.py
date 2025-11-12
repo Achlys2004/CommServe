@@ -217,6 +217,37 @@ def _fallback_classification(user_query):
             "visualization": None,
         }
 
+    # Visualization requests (high priority)
+    if any(
+        phrase in q
+        for phrase in [
+            "chart",
+            "plot",
+            "graph",
+            "visuali",
+            "create a",
+            "generate a",
+            "draw",
+            "diagram",
+        ]
+    ):
+        return {
+            "action": "CODE",
+            "reason": "Visualization/chart generation requested (fallback)",
+            "scores": {
+                "SQL": 0,
+                "RAG": 0,
+                "CODE": 1.0,
+                "SQL+RAG": 0,
+                "CONVERSATION": 0,
+                "METADATA": 0,
+            },
+            "confidence": 0.95,
+            "sql_template": None,
+            "retrieval_query": None,
+            "visualization": None,
+        }
+
     # Code generation
     if any(
         phrase in q

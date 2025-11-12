@@ -142,6 +142,27 @@ JSON Response:"""
         try:
             response = call_llm(prompt, max_tokens=LLMTokenLimits.MEDIUM)
             if response:
+                # Check if response is an error message
+                error_indicators = [
+                    "I apologize, but I'm experiencing",
+                    "Hey there! I'm getting a lot of requests",
+                    "Hmm, I'm having trouble connecting",
+                    "Oops! I ran into an unexpected issue",
+                    "All LLM providers failed",
+                    "[SYSTEM NOTICE]",
+                    "[ERROR:",
+                ]
+
+                is_error_response = any(
+                    response.startswith(indicator) for indicator in error_indicators
+                )
+
+                if is_error_response:
+                    logger.warning(
+                        f"LLM returned error message instead of JSON: {response[:100]}..."
+                    )
+                    return True, None, None  # Default to accepting query
+
                 # Parse JSON
                 import json
 
@@ -214,6 +235,30 @@ JSON Response:"""
         try:
             response = call_llm(prompt, max_tokens=LLMTokenLimits.SHORT)
             if response:
+                # Check if response is an error message
+                error_indicators = [
+                    "I apologize, but I'm experiencing",
+                    "Hey there! I'm getting a lot of requests",
+                    "Hmm, I'm having trouble connecting",
+                    "Oops! I ran into an unexpected issue",
+                    "All LLM providers failed",
+                    "[SYSTEM NOTICE]",
+                    "[ERROR:",
+                ]
+
+                is_error_response = any(
+                    response.startswith(indicator) for indicator in error_indicators
+                )
+
+                if is_error_response:
+                    logger.warning(
+                        f"LLM returned error message instead of JSON: {response[:100]}..."
+                    )
+                    return (
+                        True,
+                        "LLM validation unavailable - assuming results are meaningful",
+                    )
+
                 import json
 
                 response = response.strip()
@@ -303,6 +348,27 @@ JSON Response:"""
         try:
             response = call_llm(prompt, max_tokens=LLMTokenLimits.SHORT)
             if response:
+                # Check if response is an error message
+                error_indicators = [
+                    "I apologize, but I'm experiencing",
+                    "Hey there! I'm getting a lot of requests",
+                    "Hmm, I'm having trouble connecting",
+                    "Oops! I ran into an unexpected issue",
+                    "All LLM providers failed",
+                    "[SYSTEM NOTICE]",
+                    "[ERROR:",
+                ]
+
+                is_error_response = any(
+                    response.startswith(indicator) for indicator in error_indicators
+                )
+
+                if is_error_response:
+                    logger.warning(
+                        f"LLM returned error message instead of JSON: {response[:100]}..."
+                    )
+                    return False, "LLM unavailable - skipping insights"
+
                 import json
 
                 response = response.strip()

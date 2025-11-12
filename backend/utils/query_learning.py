@@ -220,6 +220,14 @@ class QueryLearningSystem:
         """Calculate cosine similarity between two vectors."""
         a_array = np.array(a)
         b_array = np.array(b)
+
+        # Handle dimension mismatch - skip comparison if dimensions don't match
+        if a_array.shape != b_array.shape:
+            logger.warning(
+                f"Dimension mismatch: {a_array.shape} vs {b_array.shape}. Skipping comparison."
+            )
+            return 0.0
+
         return np.dot(a_array, b_array) / (
             np.linalg.norm(a_array) * np.linalg.norm(b_array)
         )
@@ -296,6 +304,16 @@ class QueryLearningSystem:
     ):
         """Add a new query example to the learning system."""
         embedding = self.get_embedding(query)
+
+        # Validate embedding dimension before storing
+        if embedding:
+            expected_dim = 1536  # OpenAI text-embedding-3-small dimension
+            if len(embedding) != expected_dim:
+                logger.warning(
+                    f"Skipping embedding with wrong dimension: {len(embedding)} (expected {expected_dim})"
+                )
+                embedding = None
+
         embedding_str = json.dumps(embedding) if embedding else None
 
         conn = sqlite3.connect(self.db_path)
