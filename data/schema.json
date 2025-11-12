@@ -1,0 +1,131 @@
+{
+  "dataset_info": {
+    "name": "Olist Brazilian E-Commerce Dataset",
+    "date_range": "September 2016 - August 2018",
+    "description": "Brazilian e-commerce public dataset with 100k orders from multiple marketplaces",
+    "key_facts": [
+      "Data covers 2016-2018 period (NOT 2023 or later)",
+      "All dates are in YYYY-MM-DD format",
+      "Prices in Brazilian Real (R$)",
+      "Geolocation data is pre-joined to customers via zip codes",
+      "Review scores range from 1 (worst) to 5 (best)"
+    ]
+  },
+  "tables": {
+    "orders": {
+      "columns": [
+        "order_id",
+        "customer_id",
+        "order_status",
+        "order_purchase_timestamp",
+        "order_delivered_customer_date",
+        "order_estimated_delivery_date",
+        "order_approved_at"
+      ],
+      "primary_key": "order_id",
+      "description": "Order header information"
+    },
+    "order_items": {
+      "columns": [
+        "order_id",
+        "order_item_id",
+        "product_id",
+        "seller_id",
+        "price",
+        "freight_value"
+      ],
+      "primary_key": ["order_id", "order_item_id"],
+      "description": "Order line items with pricing"
+    },
+    "products": {
+      "columns": [
+        "product_id",
+        "product_category_name",
+        "product_weight_g",
+        "product_length_cm",
+        "product_height_cm",
+        "product_width_cm"
+      ],
+      "primary_key": "product_id",
+      "description": "Product catalog information"
+    },
+    "customers": {
+      "columns": [
+        "customer_id",
+        "customer_unique_id",
+        "customer_zip_code_prefix",
+        "customer_city",
+        "customer_state"
+      ],
+      "primary_key": "customer_id",
+      "description": "Customer location data - IMPORTANT: City and state columns are in customers table, NOT orders!"
+    },
+    "sellers": {
+      "columns": ["seller_id", "seller_city", "seller_state"],
+      "primary_key": "seller_id",
+      "description": "Seller location data"
+    },
+    "order_payments": {
+      "columns": [
+        "order_id",
+        "payment_sequential",
+        "payment_type",
+        "payment_installments",
+        "payment_value"
+      ],
+      "description": "Payment transaction details - IMPORTANT: Table name is 'order_payments' NOT 'payments'"
+    },
+    "order_reviews": {
+      "columns": [
+        "review_id",
+        "order_id",
+        "review_score",
+        "review_comment_message",
+        "review_creation_date"
+      ],
+      "primary_key": "review_id",
+      "description": "Customer review and rating data"
+    },
+    "category_translation": {
+      "columns": ["product_category_name", "product_category_name_english"],
+      "description": "Portuguese to English category name translations"
+    }
+  },
+  "relationships": [
+    {
+      "from": "orders.order_id",
+      "to": "order_items.order_id",
+      "type": "one_to_many"
+    },
+    {
+      "from": "orders.customer_id",
+      "to": "customers.customer_id",
+      "type": "many_to_one"
+    },
+    {
+      "from": "order_items.product_id",
+      "to": "products.product_id",
+      "type": "many_to_one"
+    },
+    {
+      "from": "order_items.seller_id",
+      "to": "sellers.seller_id",
+      "type": "many_to_one"
+    },
+    {
+      "from": "orders.order_id",
+      "to": "order_payments.order_id",
+      "type": "one_to_many"
+    },
+    {
+      "from": "orders.order_id",
+      "to": "order_reviews.order_id",
+      "type": "one_to_many"
+    },
+    {
+      "from": "products.product_category_name",
+      "to": "category_translation.product_category_name",
+      "type": "many_to_one"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+[tool.pytest.ini_options]
+# Register custom markers
+markers = [
+    "integration: marks integration tests that test multiple components",
+    "unit: marks unit tests for individual functions",
+    "slow: marks tests that take longer to run",
+]
+
+# Test discovery patterns
+testpaths = ["."]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+norecursedirs = ["test_utilities", "__pycache__"]
+
+# Output options
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+]
+
+# Coverage
+[tool.coverage.run]
+source = ["backend", "frontend"]
+omit = [
+    "*/test/*",
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
